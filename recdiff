@@ -1,0 +1,241 @@
+#!/bin/bash
+#
+# This file is part of ShellUtils. Copyright © 2011 Christophe Labouisse.
+# 
+# ShellUtils is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# ShellUtils is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with ShellUtils.  If not, see <http://www.gnu.org/licenses/>.
+
+function CopyOrLink ()
+{
+    local source=$1
+    local dest=$2
+
+    if [ -f $source ]
+    then
+	ln -s $(realpath $source) $dest
+    else
+	cp -r $source $dest
+    fi
+}
+
+function extractTARBZ2 ()
+{
+    extractTAR "$1" "$2" "j"
+}
+
+function extractTGZ ()
+{
+    extractTAR "$1" "$2" "z"
+}
+
+function extractTAR ()
+{
+    local file=$1
+    local destDir=$2
+    local compressFlag=$3
+
+    tar -x${compressFlag}f $file -C $destDir
+}
+
+function extract7ZIP ()
+{
+    local file=$1
+    local destDir=$2
+
+    7z x -o$destDir -y >/dev/null
+}
+
+function extractZIP ()
+{
+    local file=$1
+    local destDir=$2
+
+    unzip -q $file -d $destDir
+}
+
+function extractDEB ()
+{
+    local file=$1
+    local destDir=$2
+
+    mkdir $destDir/DEBIAN
+    dpkg --control $file $destDir/DEBIAN
+    dpkg --extract $file $destDir
+}
+
+function extractArchive ()
+{
+    local archive=$1
+    local recursive=$2
+    local keepArchive=$3
+
+    local destDir
+
+    if [ -d $archive ]
+    then
+	destDir=$archive
+	echo "$archive is a directory, skipping extraction"
+    else
+	destDir=${archive}-dir
+	echo "Extracting $archive to $destDir"
+
+	if [ "$keepArchive" = "yes" ]
+	then
+	    rm -rf $destDir
+	else
+	    if [ -e $destDir ]
+	    then
+		echo "Cannot extract archive $destDir already exists"
+		exit 1
+	    fi 
+	fi
+
+	mkdir $destDir
+
+	# Find out the extraction program. Zip will be used for both
+	# zip and jar and 7zip will be used for both rar and 7z
+	# archives.
+	local format=$(echo $archive | awk '
+	/\.tar\.gz$/ { print "TGZ"; }
+	/\.tgz$/ { print "TGZ"; }
+	/\.tar$/ { print "TAR"; }
+	/\.zip$/ { print "ZIP"; }
+	/\.jar$/ { print "ZIP"; }
+	/\.tar\.bz$/ { print "TARBZ2"; }
+	/\.7z$/ { print "7ZIP"; }
+	/\.rar$/ { print "7ZIP"; }
+	/\.deb$/ { print "DEB"; }
+	')
+
+	if [ -z "$format" ]
+	then
+	    echo "Cannot find an extractor for $archive"
+	    return
+	fi
+
+	extract$format $archive $destDir
+
+	if [ "$keepArchive" != "yes" ]
+	then
+	    rm -f $archive
+	fi
+    fi
+
+    if [ "$recursive" = "yes" ] 
+    then
+	local file
+	find $destDir -name '*.tar.gz' -o -name '*.jar' -o -name '*.zip' -o -name '*.tgz' -o -name '*.tar' -o -name '*.tar.bz2' -o -name '*.7z' -o -name -o -name '*.deb' | while read file
+	do
+	    extractArchive $file yes
+	done
+    fi
+}
+
+function Usage()
+{
+    cat <<EOF
+Usage:
+    $MYNAME [-l] [-c] [-w workdir] [-d diffcommand] archive1 archive2
+
+	-l: do not recurse into archives
+	-c: clear the work directory before starting
+	-w workdir: specify the work directory (defaults to recdiff-workdir)
+	-d diffcommand: specify the diff command to be used at the end.
+                        This command will take the expanded directory
+			names as arguments. The default is:
+			$DEFAULT_DIFF_COMMAND
+
+EOF
+    exit 10
+}
+
+MYNAME=$(basename $0)
+OPTS=$(getopt -o lcw:d: -- "$@")
+
+RECURSIVE=yes
+
+DEFAULT_DIFF_COMMAND="diff -qr -x MYCOM.DSA -x MYCOM.SF -x '*.html'"
+DIFFCMD="$DEFAULT_DIFF_COMMAND"
+
+if [ $? != 0 ]
+then
+    Usage
+fi
+
+eval set -- "$OPTS"
+
+while true
+do
+    case "$1" in
+        -l) RECURSIVE=no ; shift ;;
+        -w) WORKDIR="$2" ; shift 2 ;;
+        -c) CLEAR_WORK_DIR=yes ; shift ;;
+	-d) DIFFCMD="$2" ; shift 2;;
+        --) shift ; break ;;
+        *) echo "Internal error!" ; exit 1 ;;
+    esac
+done
+
+if [ -z "$2" ]
+then
+    Usage
+fi
+
+FILE1=$1
+FILE2=$2
+WORKDIR=${WORKDIR-recdiff-workdir}
+
+if [ -e $WORKDIR ]
+then
+    if [ "$CLEAR_WORK_DIR" = "yes" ]
+    then
+	echo "Clearing $WORKDIR"
+	rm -rf $WORKDIR
+    else
+	echo "$WORKDIR already exists, remove it before running recdiff"
+	exit -1
+    fi
+fi
+
+mkdir -p $WORKDIR
+
+echo "Copying files to $WORKDIR"
+CopyOrLink $FILE1 $WORKDIR
+CopyOrLink $FILE2 $WORKDIR
+
+cd $WORKDIR
+
+FILE1=$(basename $FILE1)
+FILE2=$(basename $FILE2)
+
+extractArchive $FILE1 $RECURSIVE
+extractArchive $FILE2 $RECURSIVE
+
+if [ -d $FILE1 ]
+then
+    DIR1=$FILE1
+else
+    DIR1=${FILE1}-dir
+fi
+
+if [ -d $FILE2 ]
+then
+    DIR2=$FILE2
+else
+    DIR2=${FILE2}-dir
+fi
+
+$DIFFCMD $DIR1 $DIR2 | tee diff.txt
+
+echo "Done, results in $WORKDIR/diff.txt"
+
