@@ -111,6 +111,7 @@ function extractArchive ()
 	/\.tar$/ { print "TAR"; }
 	/\.zip$/ { print "ZIP"; }
 	/\.jar$/ { print "ZIP"; }
+	/\.war$/ { print "ZIP"; }
 	/\.tar\.bz$/ { print "TARBZ2"; }
 	/\.7z$/ { print "7ZIP"; }
 	/\.rar$/ { print "7ZIP"; }
